@@ -47,10 +47,10 @@ func main() {
 	fmt.Println("serving your pages")
 	var err error
 	db, err = sqlx.Connect("sqlite", "your-pages.db")
-
 	if err != nil {
 		fmt.Printf("could not open database: %s\n", err)
 	}
+	defer db.Close()
 
 	// setup database
 	db.MustExec(TABLES)
@@ -68,6 +68,13 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// // TODO: use a multipart reader
+	// mpr, err := r.MultipartReader()
+	// for {
+	// 	part, err := mpr.NextPart()
+	// 	part.FileName()
+	// }
+
 	r.ParseMultipartForm(32 << 20)
 	sites := []string{}
 	for site := range r.MultipartForm.File {
@@ -77,6 +84,30 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	file, header, err := r.FormFile(sites[0])
 	if err != nil {
 		http.Error(w, fmt.Sprint("could not read file: ", err), http.StatusBadRequest)
+	}
+
+	tx := db.MustBegin()
+	// calling rollback after commit is safe
+	defer tx.Rollback()
+
+	website := &Website{
+		Hostname: sites[0],
+	}
+
+	res, err := tx.NamedQuery(`
+		INSERT INTO website (hostname)
+	 	VALUES (:hostname)
+		RETURNING id;
+		`,
+		website)
+
+	if err != nil {
+		http.Error(w, fmt.Sprint("could not insert website: ", err), http.StatusBadRequest)
+		return
+	}
+
+	if res.Next() {
+		res.Scan(&website.ID)
 	}
 
 	mimeType := mime.TypeByExtension(filepath.Ext(header.Filename))
@@ -111,19 +142,23 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		file := &File{
-			WebsiteID: 0,
+			WebsiteID: website.ID,
 			Path:      header.Name,
 			Blob:      bytes,
 		}
 
-		db.NamedExec(`
+		tx.NamedExec(`
 			INSERT INTO file (website_id, path, blob)
 			VALUES (:website_id, :path, :blob)
 			`, file)
 	}
 
-	fmt.Fprintf(w, "Hello, there upload\n")
-	// fmt.Print(mimeType, string(data[:100]))
+	err = tx.Commit()
+	if err != nil {
+		http.Error(w, fmt.Sprint("could not commit transaction: ", err), http.StatusInternalServerError)
+	}
+
+	fmt.Fprintf(w, "uploaded site %s", sites[0])
 }
 
 func ServeHandler(w http.ResponseWriter, r *http.Request) {
