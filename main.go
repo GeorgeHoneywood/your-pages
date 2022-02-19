@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
@@ -208,8 +209,16 @@ func ServeHandler(w http.ResponseWriter, r *http.Request) {
 	file := &File{}
 	// bit of magic to match paths with or without trailing slashes
 	err := db.Get(file, `SELECT * FROM file WHERE website_id = $1 AND (path = $2 OR path = $2 || '/');`, website.ID, r.URL.Path)
-	if err != nil {
-		http.Error(w, fmt.Sprint("file not found: ", err), http.StatusNotFound)
+
+	if err == sql.ErrNoRows {
+		// serve a 404.html if it exists
+		err := db.Get(file, `SELECT * FROM file WHERE website_id = $1 AND path = $2;`, website.ID, "/404.html")
+		if err == sql.ErrNoRows {
+			http.Error(w, "file not found", http.StatusNotFound)
+		}
+		// FIXME: I think scoping should be fine here but the two err's give me heebie jeebies
+	} else if err != nil {
+		http.Error(w, fmt.Sprint("could not query database: ", err), http.StatusInternalServerError)
 	}
 
 	http.ServeContent(w, r, file.Path, website.UpdateTime, bytes.NewReader(file.Blob))
