@@ -1,0 +1,11 @@
+services:
+  your-pages:
+    command: /bin/sh
+    build:
+      context: .
+      dockerfile: dev.Dockerfile
+    container_name: your-pages-dev
+    ports:
+    - "4444:4444"
+    volumes:
+    - ./:/app
